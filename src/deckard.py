@@ -10,6 +10,9 @@ import analysis
 import static
 import webui
 
+from IPython.core import ultratb
+sys.excepthook = ultratb.FormattedTB(mode='Verbose',
+     color_scheme='Linux', call_pdb=1)
 
 if __name__ == "__main__":
     sys.setrecursionlimit(50000)

@@ -3,6 +3,7 @@ import androguard.decompiler.dad.decompile
 
 import analysis
 import astparse
+import utils
 
 
 def resolve_identifier(context, identifier):
@@ -17,17 +18,25 @@ def resolve_identifier(context, identifier):
     return start
 
 
-def analyze_method(method):
+def analyze_method(dx, method):
     """
     Analyze Androguard MethodAnalysis object in 'method' for Xposed hooks
     """
     hooks = []
     invocations = []
-    context = {}
+    dfs_methods = [(method, {})]
 
-    def dfs_callback(node):
+    def dfs_callback(context, node):
         if node[0] == "MethodInvocation":
-            invocations.append((astparse.MethodInvocation(node), context))
+            inv = astparse.MethodInvocation(node)
+            invocations.append((inv, context.copy()))
+
+            print("found invocation:", inv.triple, node)
+            m = dx.get_method_analysis_by_name(utils.to_dv_notation(inv.triple[0]), inv.triple[1], inv.triple[2])
+            if m and not m.is_external():
+                print("to analyze:", m.get_method())
+                dfs_methods.append((dx.get_method(m.get_method()), context.copy()))
+
             return False
         if node[0] == "LocalDeclarationStatement":
             decl = astparse.LocalDeclarationStatement(node)
@@ -40,15 +49,20 @@ def analyze_method(method):
 
         return True
 
-    decompiler = androguard.decompiler.dad.decompile.DvMethod(method)
-    decompiler.process(doAST=True)
-    ast = decompiler.ast
+    while dfs_methods:
+        (m, context) = dfs_methods.pop()
+        print("analyzing", m, context)
 
-    for p in ast["params"]:
-        param = astparse.Parameter(p)
-        context[str(param.name)] = param
+        decompiler = androguard.decompiler.dad.decompile.DvMethod(m)
+        decompiler.process(doAST=True)
+        ast = decompiler.ast
 
-    astparse.dfs(ast['body'], dfs_callback)
+        for p in ast["params"]:
+            param = astparse.Parameter(p)
+            if str(param.name) not in context:
+                context[str(param.name)] = param
+
+        astparse.dfs(ast['body'], lambda n: dfs_callback(context, n))
 
     for inv, ctx in invocations:
         if not type(inv.base) is astparse.TypeName:
@@ -109,57 +123,24 @@ def analyze_method(method):
             hook = analysis.Hook(cls, targetmethod, callback)
 
             hooks.append(hook)
-            # print("Context:")
-            # for k, v in ctx.items():
-            #    print("\t", k, "=", v)
+
+    print(hooks)
     return hooks
 
 
 def analyze(a, d, dx):
     if not (a and d and dx):
         print("Could not analyze..")
+        return None
+
+    ep_name = utils.get_xposed_entrypoint(a)
+    if ep_name is None:
+        print("No Xposed entrypoint found")
         return
 
-    cls = dx.get_class_analysis("Lde/robv/android/xposed/XposedHelpers;")
-    if not cls:
-        print("No reference to Xposed found. Is this an Xposed module?")
-        return
+    print("Xposed entrypoint:", ep_name)
+    ep_method = dx.get_method_analysis_by_name(utils.to_dv_notation(ep_name),
+                                               "handleLoadPackage",
+                                               "(Lde/robv/android/xposed/callbacks/XC_LoadPackage$LoadPackageParam;)V")
 
-    m_clsparam = dx.get_method_analysis_by_name(cls.get_vm_class().get_name(),
-                                                "findAndHookMethod",
-                                                "(Ljava/lang/Class; Ljava/lang/String; "
-                                                "[Ljava/lang/Object;)Lde/robv/android/xposed/XC_MethodHook$Unhook;")
-    m_strparam = dx.get_method_analysis_by_name(cls.get_vm_class().get_name(),
-                                                "findAndHookMethod",
-                                                "(Ljava/lang/String; Ljava/lang/ClassLoader; Ljava/lang/String; "
-                                                "[Ljava/lang/Object;)Lde/robv/android/xposed/XC_MethodHook$Unhook;")
-    c_clsparam = dx.get_method_analysis_by_name(cls.get_vm_class().get_name(),
-                                                "findAndHookConstructor",
-                                                "(Ljava/lang/Class; [Ljava/lang/Object;)Lde/robv/android/xposed"
-                                                "/XC_MethodHook$Unhook;")
-    c_strparam = dx.get_method_analysis_by_name(cls.get_vm_class().get_name(),
-                                                "findAndHookConstructor",
-                                                "(Ljava/lang/String; Ljava/lang/ClassLoader; "
-                                                "[Ljava/lang/Object;)Lde/robv/android/xposed/XC_MethodHook$Unhook;")
-
-    if not (m_clsparam or m_strparam):
-        print("No references to findAndHookMethod() found")
-    if not (c_clsparam or c_strparam):
-        print("No references to findAndHookConstructor() found")
-
-    # gather all methods referencing findAndHookMethod() and store them in a set
-    methods = set()
-    xrefs = []
-    for x in [m_strparam, m_clsparam, c_strparam, c_clsparam]:
-        if x:
-            xrefs.extend(x.get_xref_from())
-
-    for xref in xrefs:
-        (xref_class, xref_method, xref_offset) = xref
-        methods.add(dx.get_method(xref_method))
-
-    hooks = []
-    for m in methods:
-        hooks.extend(analyze_method(m))
-
-    return hooks
+    return analyze_method(dx, dx.get_method(ep_method.get_method()))
