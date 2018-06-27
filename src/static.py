@@ -33,9 +33,10 @@ def analyze_method(dx, method):
             invocations.append((inv, context.copy()))
 
             print("found invocation:", inv.triple, node)
-            m = dx.get_method_analysis_by_name(utils.to_dv_notation(inv.triple[0]), inv.triple[1], inv.triple[2])
+            m = dx.get_method_analysis_by_name(utils.to_dv_notation(inv.triple[0]),
+                                               inv.triple[1],
+                                               inv.triple[2].replace(";L", "; L")) # notation fix
             if m and not m.is_external():
-                print("to analyze:", m.get_method())
                 dfs_methods.append((dx.get_method(m.get_method()), context.copy()))
 
             return False
@@ -52,7 +53,6 @@ def analyze_method(dx, method):
 
     while dfs_methods:
         (m, context) = dfs_methods.pop()
-        print("analyzing", m, context)
 
         decompiler = androguard.decompiler.dad.decompile.DvMethod(m)
         decompiler.process(doAST=True)
@@ -144,7 +144,7 @@ def analyze(a, d, dx):
                                                "handleLoadPackage",
                                                "(Lde/robv/android/xposed/callbacks/XC_LoadPackage$LoadPackageParam;)V")
 
-    return hooks
+    return analyze_method(dx, dx.get_method(ep_method.get_method()))
 
 def analyze_callback(a, d, dx, callback):
     result = []
